@@ -32,6 +32,7 @@ import (
 func main() {
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file. stdin will be used if - is passed.")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
+	copyEnvFlag := flag.Bool("copy-env", true, "copy environment to ssh sessions (default true)")
 	logPathFlag := flag.String("log", "otssh.log", "path to log to")
 	timeoutFlag := flag.Int("timeout", 600, "timeout in seconds")
 	portFlag := flag.String("port", "2022", "port to listen on")
@@ -39,6 +40,7 @@ func main() {
 	flag.Parse()
 
 	announceCmd := *announceCmdFlag
+	copyEnv := *copyEnvFlag
 	logPath := *logPathFlag
 	timeout := *timeoutFlag
 	port := *portFlag
@@ -48,12 +50,12 @@ func main() {
 		log.Fatal("otssh: -authorized-keys option is required")
 	}
 
-	if err := run(authorizedKeysPath, announceCmd, logPath, port, timeout); err != nil {
+	if err := run(authorizedKeysPath, announceCmd, logPath, port, timeout, copyEnv); err != nil {
 		log.Fatal("otssh:", err)
 	}
 }
 
-func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int) error {
+func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, copyEnv bool) error {
 	ctx := context.Background()
 
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
@@ -110,7 +112,7 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int) err
 	var once sync.Once
 	server.Handle(func(s ssh.Session) {
 		once.Do(func() {
-			handleSession(logFile, s)
+			handleSession(logFile, copyEnv, s)
 			server.Shutdown(ctx)
 		})
 	})
@@ -200,7 +202,7 @@ func setWinsize(f *os.File, w, h int) {
 		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
 }
 
-func handleSession(logW io.Writer, s ssh.Session) {
+func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "bash"
@@ -210,7 +212,10 @@ func handleSession(logW io.Writer, s ssh.Session) {
 
 	ptyReq, winCh, isPty := s.Pty()
 	if isPty {
-		cmd.Env = append(cmd.Env, os.Environ()...)
+		if copyEnv {
+			cmd.Env = append(cmd.Env, os.Environ()...)
+		}
+
 		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 		f, err := pty.Start(cmd)
 		if err != nil {
