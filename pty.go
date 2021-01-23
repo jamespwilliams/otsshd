@@ -141,7 +141,13 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 		return err
 	}
 
-	return <-sessionChan
+	select {
+	case err := <-sessionChan:
+		return err
+	default:
+	}
+
+	return nil
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
