@@ -40,6 +40,10 @@ func main() {
 	flag.Parse()
 
 	authorizedKeysPath := *authorizedKeysPathFlag
+	if authorizedKeysPath == "" {
+		log.Print("otssh: -authorized-keys not passed: reading from stdin")
+	}
+
 	announceCmd := *announceCmdFlag
 	copyEnv := *copyEnvFlag
 	logPath := *logPathFlag
@@ -194,8 +198,14 @@ func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
 	var keys []gossh.PublicKey
 
 	scanner := bufio.NewScanner(f)
+
 	for scanner.Scan() {
-		key, _, _, _, err := gossh.ParseAuthorizedKey(scanner.Bytes())
+		bytes := scanner.Bytes()
+		if len(keys) == 0 && len(bytes) == 0 {
+			return nil, fmt.Errorf("no keys supplied - either pass a file using -authorized-keys, or pipe them in")
+		}
+
+		key, _, _, _, err := gossh.ParseAuthorizedKey(bytes)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse key on line %v: %w", len(keys), err)
 		}
