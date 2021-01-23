@@ -28,7 +28,7 @@ import (
 func main() {
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
-	portFlag := flag.String("port", "", "2022")
+	portFlag := flag.String("port", "2022", "port to listen on")
 
 	flag.Parse()
 
@@ -40,60 +40,29 @@ func main() {
 		log.Fatal("-authorized-keys option is required")
 	}
 
+	if err := run(authorizedKeysPath, announceCmd, port); err != nil {
+		log.Fatal(err)
+	}
+}
+
+func run(authorizedKeysPath, announceCmd, port string) error {
 	authorizedKeys, err := parseAuthorizedKeysFile(authorizedKeysPath)
 	if err != nil {
-		log.Fatal("failed to parse authorized keys file", err)
+		return fmt.Errorf("failed to parse authorized keys file: %w", err)
 	}
 
-	ssh.Handle(func(s ssh.Session) {
-		cmd := exec.Command("bash")
-		ptyReq, winCh, isPty := s.Pty()
-		if isPty {
-			cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
-			f, err := pty.Start(cmd)
-			if err != nil {
-				panic(err)
-			}
-			go func() {
-				for win := range winCh {
-					setWinsize(f, win.Width, win.Height)
-				}
-			}()
-			go func() {
-				io.Copy(f, s)
-			}()
-
-			r := bufio.NewReaderSize(f, 1024)
-			for {
-				b := make([]byte, 1024)
-				_, err := r.Read(b)
-				if err != nil {
-					panic(err)
-				}
-
-				fmt.Print(string(b))
-
-				if _, err := s.Write(b); err != nil {
-					panic(err)
-				}
-			}
-
-			cmd.Wait()
-		} else {
-			io.WriteString(s, "No PTY requested.\n")
-			s.Exit(1)
-		}
-	})
+	ssh.Handle(handleSession)
 
 	pub, priv, err := generateKey()
 	if err != nil {
-		log.Fatal("failed to generate key", err)
+		return fmt.Errorf("failed to generate key: %w", err)
 	}
 
 	privPEM := generatePrivateKeyPEM(priv)
+
 	pubKey, err := gossh.NewPublicKey(pub)
 	if err != nil {
-		log.Fatal("failed to convert public key to ssh.PublicKey", err)
+		fmt.Errorf("failed to convert public key to ssh.PublicKey: %w", err)
 	}
 
 	if announceCmd != "" {
@@ -117,8 +86,10 @@ func main() {
 			return false
 		}),
 	); err != nil {
-		log.Fatal(err)
+		return err
 	}
+
+	return nil
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
@@ -175,4 +146,50 @@ func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
 func setWinsize(f *os.File, w, h int) {
 	syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCSWINSZ),
 		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
+}
+
+func handleSession(s ssh.Session) {
+	cmd := exec.Command("bash")
+	ptyReq, winCh, isPty := s.Pty()
+	if isPty {
+		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
+		f, err := pty.Start(cmd)
+		if err != nil {
+			panic(err)
+		}
+		go func() {
+			for win := range winCh {
+				setWinsize(f, win.Width, win.Height)
+			}
+		}()
+		go func() {
+			io.Copy(f, s)
+		}()
+
+		r := bufio.NewReaderSize(f, 1024)
+		for {
+			b := make([]byte, 1024)
+			_, err := r.Read(b)
+
+			if _, ok := err.(*os.PathError); ok {
+				break
+			}
+
+			if err != nil {
+				log.Fatal(err)
+			}
+
+			fmt.Print(string(b))
+
+			if _, err := s.Write(b); err != nil {
+				fmt.Printf("%#v\n", err)
+				log.Fatal(err)
+			}
+		}
+
+		cmd.Wait()
+	} else {
+		io.WriteString(s, "No PTY requested.\n")
+		s.Exit(1)
+	}
 }
