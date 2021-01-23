@@ -47,12 +47,20 @@ func main() {
 	port := *portFlag
 
 	if err := run(authorizedKeysPath, announceCmd, logPath, port, timeout, copyEnv); err != nil {
-		log.Fatal("otssh:", err)
+		code := 0
+
+		var exitErr *exec.ExitError
+		if errors.As(err, &exitErr) {
+			code = exitErr.ProcessState.ExitCode()
+		}
+
+		log.Print("otssh: ", err)
+		os.Exit(code)
 	}
 }
 
 func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, copyEnv bool) error {
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
 
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
@@ -103,15 +111,16 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 		},
 	}
 
-	var sessionChan chan error
+	var sessionErr error
 
 	// We use the same once for handling the session and shutting down the server, because we don't want to shut
 	// down the server when the timeout is hit if there's a live session:
 	var once sync.Once
 	server.Handle(func(s ssh.Session) {
 		once.Do(func() {
-			sessionChan <- handleSession(logFile, copyEnv, s)
-			server.Shutdown(ctx)
+			sessionErr = handleSession(logFile, copyEnv, s)
+			server.Close()
+			cancel()
 		})
 	})
 
@@ -128,6 +137,8 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 
 	g.Go(func() error {
 		select {
+		case <-ctx.Done():
+			return nil
 		case <-time.After(time.Duration(timeout) * time.Second):
 			once.Do(func() {
 				log.Printf("otssh: no connection within %v seconds, exiting\n", timeout)
@@ -141,13 +152,7 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 		return err
 	}
 
-	select {
-	case err := <-sessionChan:
-		return err
-	default:
-	}
-
-	return nil
+	return sessionErr
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
