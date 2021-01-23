@@ -30,8 +30,7 @@ import (
 )
 
 func main() {
-	// TODO: allow stdin:
-	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
+	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file. stdin will be used if - is passed.")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
 	logPathFlag := flag.String("log", "otssh.log", "path to log to")
 	timeoutFlag := flag.Int("timeout", 600, "timeout in seconds")
@@ -168,9 +167,13 @@ func performAnnouncement(command string, key ssh.PublicKey) (stderr string, err 
 }
 
 func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
-	f, err := os.Open(path)
-	if err != nil {
-		return nil, fmt.Errorf("failed to open file: %w", err)
+	f := os.Stdin
+	if path != "-" {
+		var err error
+		f, err = os.Open(path)
+		if err != nil {
+			return nil, fmt.Errorf("failed to open file: %w", err)
+		}
 	}
 
 	var keys []gossh.PublicKey
