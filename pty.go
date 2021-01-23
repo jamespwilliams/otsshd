@@ -2,6 +2,7 @@ package main
 
 import (
 	"bufio"
+	"context"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
@@ -14,10 +15,12 @@ import (
 	"os"
 	"os/exec"
 	"strings"
+	"sync"
 	"syscall"
 	"unsafe"
 
 	gossh "golang.org/x/crypto/ssh"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/mikesmitty/edkey"
 
@@ -46,12 +49,14 @@ func main() {
 }
 
 func run(authorizedKeysPath, announceCmd, port string) error {
+	ctx := context.Background()
+
 	authorizedKeys, err := parseAuthorizedKeysFile(authorizedKeysPath)
 	if err != nil {
 		return fmt.Errorf("failed to parse authorized keys file: %w", err)
 	}
 
-	ssh.Handle(handleSession)
+	var once sync.Once
 
 	pub, priv, err := generateKey()
 	if err != nil {
@@ -59,6 +64,10 @@ func run(authorizedKeysPath, announceCmd, port string) error {
 	}
 
 	privPEM := generatePrivateKeyPEM(priv)
+	signer, err := gossh.ParsePrivateKey(privPEM)
+	if err != nil {
+		fmt.Errorf("failed to convert private key to format expected by ssh server: %w", err)
+	}
 
 	pubKey, err := gossh.NewPublicKey(pub)
 	if err != nil {
@@ -74,8 +83,9 @@ func run(authorizedKeysPath, announceCmd, port string) error {
 
 	fmt.Println(formatKnownHosts(pubKey))
 
-	if err := ssh.ListenAndServe(":"+port, nil, ssh.HostKeyPEM(privPEM),
-		ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
+	server := &ssh.Server{
+		Addr: ":" + port,
+		PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
 			fmt.Println("client trying", key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
 
 			for _, authorizedKey := range authorizedKeys {
@@ -84,12 +94,28 @@ func run(authorizedKeysPath, announceCmd, port string) error {
 				}
 			}
 			return false
-		}),
-	); err != nil {
-		return err
+		},
 	}
 
-	return nil
+	server.Handle(func(s ssh.Session) {
+		once.Do(func() {
+			handleSession(s)
+			server.Shutdown(ctx)
+		})
+	})
+
+	server.AddHostKey(signer)
+
+	var g errgroup.Group
+	g.Go(func() error {
+		err := server.ListenAndServe()
+		if errors.Is(err, ssh.ErrServerClosed) {
+			return nil
+		}
+		return err
+	})
+
+	return g.Wait()
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
@@ -190,6 +216,5 @@ func handleSession(s ssh.Session) {
 		cmd.Wait()
 	} else {
 		io.WriteString(s, "No PTY requested.\n")
-		s.Exit(1)
 	}
 }

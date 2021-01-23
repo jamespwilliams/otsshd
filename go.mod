@@ -8,4 +8,5 @@ require (
 	github.com/gliderlabs/ssh v0.3.1 // indirect
 	github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a // indirect
 	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad // indirect
+	golang.org/x/sync v0.0.0-20201207232520-09787c993a3a // indirect
 )
