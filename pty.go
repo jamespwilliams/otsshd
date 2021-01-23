@@ -129,8 +129,8 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 	g.Go(func() error {
 		select {
 		case <-time.After(time.Duration(timeout) * time.Second):
-			log.Printf("otssh: no connection within %v seconds, exiting\n", timeout)
 			once.Do(func() {
+				log.Printf("otssh: no connection within %v seconds, exiting\n", timeout)
 				server.Shutdown(ctx)
 			})
 		}
