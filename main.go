@@ -65,6 +65,7 @@ func main() {
 
 func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, copyEnv bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
 	if err != nil {
