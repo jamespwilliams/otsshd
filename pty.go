@@ -30,7 +30,7 @@ import (
 )
 
 func main() {
-	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file. stdin will be used if - is passed.")
+	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file. stdin will be used if not passed.")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
 	copyEnvFlag := flag.Bool("copy-env", true, "copy environment to ssh sessions (default true)")
 	logPathFlag := flag.String("log", "otssh.log", "path to log to")
@@ -39,16 +39,12 @@ func main() {
 
 	flag.Parse()
 
+	authorizedKeysPath := *authorizedKeysPathFlag
 	announceCmd := *announceCmdFlag
 	copyEnv := *copyEnvFlag
 	logPath := *logPathFlag
 	timeout := *timeoutFlag
 	port := *portFlag
-
-	authorizedKeysPath := *authorizedKeysPathFlag
-	if authorizedKeysPath == "" {
-		log.Fatal("otssh: -authorized-keys option is required")
-	}
 
 	if err := run(authorizedKeysPath, announceCmd, logPath, port, timeout, copyEnv); err != nil {
 		log.Fatal("otssh:", err)
@@ -107,12 +103,14 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 		},
 	}
 
+	var sessionChan chan error
+
 	// We use the same once for handling the session and shutting down the server, because we don't want to shut
 	// down the server when the timeout is hit if there's a live session:
 	var once sync.Once
 	server.Handle(func(s ssh.Session) {
 		once.Do(func() {
-			handleSession(logFile, copyEnv, s)
+			sessionChan <- handleSession(logFile, copyEnv, s)
 			server.Shutdown(ctx)
 		})
 	})
@@ -139,7 +137,11 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 		return nil
 	})
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
+
+	return <-sessionChan
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
@@ -170,7 +172,7 @@ func performAnnouncement(command string, key ssh.PublicKey) (stderr string, err 
 
 func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
 	f := os.Stdin
-	if path != "-" {
+	if path != "" {
 		var err error
 		f, err = os.Open(path)
 		if err != nil {
@@ -202,7 +204,7 @@ func setWinsize(f *os.File, w, h int) {
 		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
 }
 
-func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) {
+func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) error {
 	shell := os.Getenv("SHELL")
 	if shell == "" {
 		shell = "bash"
@@ -213,7 +215,7 @@ func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) {
 	ptyReq, winCh, isPty := s.Pty()
 	if !isPty {
 		io.WriteString(s, "No PTY requested.\n")
-		return
+		return nil
 	}
 
 	if copyEnv {
@@ -223,7 +225,7 @@ func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) {
 	cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 	f, err := pty.Start(cmd)
 	if err != nil {
-		panic(err)
+		return fmt.Errorf("failed to start pty: %w", err)
 	}
 
 	go func() {
@@ -246,19 +248,17 @@ func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) {
 		}
 
 		if err != nil {
-			log.Fatal(err)
+			return fmt.Errorf("failed to read from command: %w", err)
 		}
 
 		if _, err := logW.Write(b); err != nil {
-			// TODO: handle this better...
-			log.Fatal(err)
+			return fmt.Errorf("failed to write to log: %w", err)
 		}
 
 		if _, err := s.Write(b); err != nil {
-			fmt.Printf("%#v\n", err)
-			log.Fatal(err)
+			return fmt.Errorf("failed to write to session: %w", err)
 		}
 	}
 
-	cmd.Wait()
+	return cmd.Wait()
 }
