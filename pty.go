@@ -6,6 +6,7 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
+	"flag"
 	"fmt"
 	"io"
 	"log"
@@ -23,6 +24,20 @@ import (
 )
 
 func main() {
+	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
+
+	flag.Parse()
+
+	authorizedKeysPath := *authorizedKeysPathFlag
+	if authorizedKeysPath == "" {
+		log.Fatal("-authorized-keys option is required")
+	}
+
+	authorizedKeys, err := parseAuthorizedKeysFile(authorizedKeysPath)
+	if err != nil {
+		log.Fatal("failed to parse authorized keys file", err)
+	}
+
 	ssh.Handle(func(s ssh.Session) {
 		cmd := exec.Command("bash")
 		ptyReq, winCh, isPty := s.Pty()
@@ -74,10 +89,21 @@ func main() {
 		log.Fatal("failed to convert public key to ssh.PublicKey", err)
 	}
 
-	_ = privPEM
-
 	fmt.Println(pubKey.Type(), base64.StdEncoding.EncodeToString(pubKey.Marshal()))
-	log.Fatal(ssh.ListenAndServe(":2222", nil, ssh.HostKeyPEM(privPEM)))
+	if err := ssh.ListenAndServe(":2222", nil, ssh.HostKeyPEM(privPEM),
+		ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
+			fmt.Println("client trying", key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
+
+			for _, authorizedKey := range authorizedKeys {
+				if ssh.KeysEqual(key, authorizedKey) {
+					return true
+				}
+			}
+			return false
+		}),
+	); err != nil {
+		log.Fatal(err)
+	}
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
@@ -86,6 +112,31 @@ func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
 
 func generatePrivateKeyPEM(priv ed25519.PrivateKey) []byte {
 	return pem.EncodeToMemory(&pem.Block{Type: "OPENSSH PRIVATE KEY", Bytes: edkey.MarshalED25519PrivateKey(priv)})
+}
+
+func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, fmt.Errorf("failed to open file: %w", err)
+	}
+
+	var keys []gossh.PublicKey
+
+	scanner := bufio.NewScanner(f)
+	for scanner.Scan() {
+		key, _, _, _, err := gossh.ParseAuthorizedKey(scanner.Bytes())
+		if err != nil {
+			return nil, fmt.Errorf("failed to parse key on line %v: %w", len(keys), err)
+		}
+
+		keys = append(keys, key)
+	}
+
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("scanning file failed: %w", err)
+	}
+
+	return keys, nil
 }
 
 func setWinsize(f *os.File, w, h int) {
