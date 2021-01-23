@@ -211,51 +211,54 @@ func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) {
 	cmd := exec.Command(shell)
 
 	ptyReq, winCh, isPty := s.Pty()
-	if isPty {
-		if copyEnv {
-			cmd.Env = append(cmd.Env, os.Environ()...)
-		}
-
-		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
-		f, err := pty.Start(cmd)
-		if err != nil {
-			panic(err)
-		}
-		go func() {
-			for win := range winCh {
-				setWinsize(f, win.Width, win.Height)
-			}
-		}()
-		go func() {
-			io.Copy(f, s)
-		}()
-
-		r := bufio.NewReaderSize(f, 1024)
-		for {
-			b := make([]byte, 1024)
-			_, err := r.Read(b)
-
-			if _, ok := err.(*os.PathError); ok {
-				break
-			}
-
-			if err != nil {
-				log.Fatal(err)
-			}
-
-			if _, err := logW.Write(b); err != nil {
-				// TODO: handle this better...
-				log.Fatal(err)
-			}
-
-			if _, err := s.Write(b); err != nil {
-				fmt.Printf("%#v\n", err)
-				log.Fatal(err)
-			}
-		}
-
-		cmd.Wait()
-	} else {
+	if !isPty {
 		io.WriteString(s, "No PTY requested.\n")
+		return
 	}
+
+	if copyEnv {
+		cmd.Env = append(cmd.Env, os.Environ()...)
+	}
+
+	cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
+	f, err := pty.Start(cmd)
+	if err != nil {
+		panic(err)
+	}
+
+	go func() {
+		for win := range winCh {
+			setWinsize(f, win.Width, win.Height)
+		}
+	}()
+
+	go func() {
+		io.Copy(f, s)
+	}()
+
+	r := bufio.NewReaderSize(f, 1024)
+	for {
+		b := make([]byte, 1024)
+		_, err := r.Read(b)
+
+		if _, ok := err.(*os.PathError); ok {
+			break
+		}
+
+		if err != nil {
+			log.Fatal(err)
+		}
+
+		if _, err := logW.Write(b); err != nil {
+			// TODO: handle this better...
+			log.Fatal(err)
+		}
+
+		if _, err := s.Write(b); err != nil {
+			fmt.Printf("%#v\n", err)
+			log.Fatal(err)
+		}
+	}
+
+	cmd.Wait()
 }
