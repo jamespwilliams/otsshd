@@ -29,13 +29,16 @@ import (
 )
 
 func main() {
+	// TODO: allow stdin:
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
+	logPathFlag := flag.String("log", "otssh.log", "path to log to")
 	portFlag := flag.String("port", "2022", "port to listen on")
 
 	flag.Parse()
 
 	announceCmd := *announceCmdFlag
+	logPath := *logPathFlag
 	port := *portFlag
 
 	authorizedKeysPath := *authorizedKeysPathFlag
@@ -43,13 +46,18 @@ func main() {
 		log.Fatal("-authorized-keys option is required")
 	}
 
-	if err := run(authorizedKeysPath, announceCmd, port); err != nil {
+	if err := run(authorizedKeysPath, announceCmd, logPath, port); err != nil {
 		log.Fatal(err)
 	}
 }
 
-func run(authorizedKeysPath, announceCmd, port string) error {
+func run(authorizedKeysPath, announceCmd, logPath, port string) error {
 	ctx := context.Background()
+
+	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
+	if err != nil {
+		return fmt.Errorf("failed to open log file at %v: %w", logPath, err)
+	}
 
 	authorizedKeys, err := parseAuthorizedKeysFile(authorizedKeysPath)
 	if err != nil {
@@ -99,7 +107,7 @@ func run(authorizedKeysPath, announceCmd, port string) error {
 
 	server.Handle(func(s ssh.Session) {
 		once.Do(func() {
-			handleSession(s)
+			handleSession(logFile, s)
 			server.Shutdown(ctx)
 		})
 	})
@@ -174,7 +182,7 @@ func setWinsize(f *os.File, w, h int) {
 		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
 }
 
-func handleSession(s ssh.Session) {
+func handleSession(logW io.Writer, s ssh.Session) {
 	cmd := exec.Command("bash")
 	ptyReq, winCh, isPty := s.Pty()
 	if isPty {
@@ -205,7 +213,10 @@ func handleSession(s ssh.Session) {
 				log.Fatal(err)
 			}
 
-			fmt.Print(string(b))
+			if _, err := logW.Write(b); err != nil {
+				// TODO: handle this better...
+				log.Fatal(err)
+			}
 
 			if _, err := s.Write(b); err != nil {
 				fmt.Printf("%#v\n", err)
