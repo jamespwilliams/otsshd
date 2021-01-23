@@ -17,6 +17,7 @@ import (
 	"strings"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	gossh "golang.org/x/crypto/ssh"
@@ -33,25 +34,27 @@ func main() {
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
 	logPathFlag := flag.String("log", "otssh.log", "path to log to")
+	timeoutFlag := flag.Int("timeout", 600, "timeout in seconds")
 	portFlag := flag.String("port", "2022", "port to listen on")
 
 	flag.Parse()
 
 	announceCmd := *announceCmdFlag
 	logPath := *logPathFlag
+	timeout := *timeoutFlag
 	port := *portFlag
 
 	authorizedKeysPath := *authorizedKeysPathFlag
 	if authorizedKeysPath == "" {
-		log.Fatal("-authorized-keys option is required")
+		log.Fatal("otssh: -authorized-keys option is required")
 	}
 
-	if err := run(authorizedKeysPath, announceCmd, logPath, port); err != nil {
-		log.Fatal(err)
+	if err := run(authorizedKeysPath, announceCmd, logPath, port, timeout); err != nil {
+		log.Fatal("otssh:", err)
 	}
 }
 
-func run(authorizedKeysPath, announceCmd, logPath, port string) error {
+func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int) error {
 	ctx := context.Background()
 
 	logFile, err := os.OpenFile(logPath, os.O_APPEND|os.O_WRONLY|os.O_CREATE, 0o600)
@@ -63,8 +66,6 @@ func run(authorizedKeysPath, announceCmd, logPath, port string) error {
 	if err != nil {
 		return fmt.Errorf("failed to parse authorized keys file: %w", err)
 	}
-
-	var once sync.Once
 
 	pub, priv, err := generateKey()
 	if err != nil {
@@ -105,6 +106,9 @@ func run(authorizedKeysPath, announceCmd, logPath, port string) error {
 		},
 	}
 
+	// We use the same once for handling the session and shutting down the server, because we don't want to shut
+	// down the server when the timeout is hit if there's a live session:
+	var once sync.Once
 	server.Handle(func(s ssh.Session) {
 		once.Do(func() {
 			handleSession(logFile, s)
@@ -121,6 +125,17 @@ func run(authorizedKeysPath, announceCmd, logPath, port string) error {
 			return nil
 		}
 		return err
+	})
+
+	g.Go(func() error {
+		select {
+		case <-time.After(time.Duration(timeout) * time.Second):
+			log.Printf("otssh: no connection within %v seconds, exiting\n", timeout)
+			once.Do(func() {
+				server.Shutdown(ctx)
+			})
+		}
+		return nil
 	})
 
 	return g.Wait()
