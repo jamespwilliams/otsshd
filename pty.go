@@ -28,10 +28,12 @@ import (
 func main() {
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
+	portFlag := flag.String("port", "", "2022")
 
 	flag.Parse()
 
 	announceCmd := *announceCmdFlag
+	port := *portFlag
 
 	authorizedKeysPath := *authorizedKeysPathFlag
 	if authorizedKeysPath == "" {
@@ -103,7 +105,7 @@ func main() {
 
 	fmt.Println(formatKnownHosts(pubKey))
 
-	if err := ssh.ListenAndServe(":2222", nil, ssh.HostKeyPEM(privPEM),
+	if err := ssh.ListenAndServe(":"+port, nil, ssh.HostKeyPEM(privPEM),
 		ssh.PublicKeyAuth(func(ctx ssh.Context, key ssh.PublicKey) bool {
 			fmt.Println("client trying", key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
 
