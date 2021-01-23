@@ -2,6 +2,10 @@ package main
 
 import (
 	"bufio"
+	"crypto/ed25519"
+	"crypto/rand"
+	"encoding/base64"
+	"encoding/pem"
 	"fmt"
 	"io"
 	"log"
@@ -10,14 +14,13 @@ import (
 	"syscall"
 	"unsafe"
 
+	gossh "golang.org/x/crypto/ssh"
+
+	"github.com/mikesmitty/edkey"
+
 	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 )
-
-func setWinsize(f *os.File, w, h int) {
-	syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCSWINSZ),
-		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
-}
 
 func main() {
 	ssh.Handle(func(s ssh.Session) {
@@ -41,7 +44,8 @@ func main() {
 			r := bufio.NewReaderSize(f, 1024)
 			for {
 				b := make([]byte, 1024)
-				if _, err := r.Read(b); err != nil {
+				_, err := r.Read(b)
+				if err != nil {
 					panic(err)
 				}
 
@@ -59,6 +63,32 @@ func main() {
 		}
 	})
 
-	log.Println("starting ssh server on port 2222...")
-	log.Fatal(ssh.ListenAndServe(":2222", nil))
+	pub, priv, err := generateKey()
+	if err != nil {
+		log.Fatal("failed to generate key", err)
+	}
+
+	privPEM := generatePrivateKeyPEM(priv)
+	pubKey, err := gossh.NewPublicKey(pub)
+	if err != nil {
+		log.Fatal("failed to convert public key to ssh.PublicKey", err)
+	}
+
+	_ = privPEM
+
+	fmt.Println(pubKey.Type(), base64.StdEncoding.EncodeToString(pubKey.Marshal()))
+	log.Fatal(ssh.ListenAndServe(":2222", nil, ssh.HostKeyPEM(privPEM)))
+}
+
+func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
+	return ed25519.GenerateKey(rand.Reader)
+}
+
+func generatePrivateKeyPEM(priv ed25519.PrivateKey) []byte {
+	return pem.EncodeToMemory(&pem.Block{Type: "OPENSSH PRIVATE KEY", Bytes: edkey.MarshalED25519PrivateKey(priv)})
+}
+
+func setWinsize(f *os.File, w, h int) {
+	syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCSWINSZ),
+		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
 }
