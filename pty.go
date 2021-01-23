@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log"
@@ -34,9 +35,23 @@ func main() {
 				}
 			}()
 			go func() {
-				io.Copy(f, s) // stdin
+				io.Copy(f, s)
 			}()
-			io.Copy(s, f) // stdout
+
+			r := bufio.NewReaderSize(f, 1024)
+			for {
+				b := make([]byte, 1024)
+				if _, err := r.Read(b); err != nil {
+					panic(err)
+				}
+
+				fmt.Print(string(b))
+
+				if _, err := s.Write(b); err != nil {
+					panic(err)
+				}
+			}
+
 			cmd.Wait()
 		} else {
 			io.WriteString(s, "No PTY requested.\n")
