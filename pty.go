@@ -201,9 +201,16 @@ func setWinsize(f *os.File, w, h int) {
 }
 
 func handleSession(logW io.Writer, s ssh.Session) {
-	cmd := exec.Command("bash")
+	shell := os.Getenv("SHELL")
+	if shell == "" {
+		shell = "bash"
+	}
+
+	cmd := exec.Command(shell)
+
 	ptyReq, winCh, isPty := s.Pty()
 	if isPty {
+		cmd.Env = append(cmd.Env, os.Environ()...)
 		cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
 		f, err := pty.Start(cmd)
 		if err != nil {
