@@ -6,12 +6,14 @@ import (
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/pem"
+	"errors"
 	"flag"
 	"fmt"
 	"io"
 	"log"
 	"os"
 	"os/exec"
+	"strings"
 	"syscall"
 	"unsafe"
 
@@ -25,8 +27,11 @@ import (
 
 func main() {
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file")
+	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
 
 	flag.Parse()
+
+	announceCmd := *announceCmdFlag
 
 	authorizedKeysPath := *authorizedKeysPathFlag
 	if authorizedKeysPath == "" {
@@ -89,6 +94,13 @@ func main() {
 		log.Fatal("failed to convert public key to ssh.PublicKey", err)
 	}
 
+	if announceCmd != "" {
+		if stderr, err := performAnnouncement(announceCmd, pubKey); err != nil {
+			log.Print("announcement failed:", err)
+			log.Print("stderr from announcement:", stderr)
+		}
+	}
+
 	fmt.Println(formatKnownHosts(pubKey))
 
 	if err := ssh.ListenAndServe(":2222", nil, ssh.HostKeyPEM(privPEM),
@@ -117,6 +129,20 @@ func generatePrivateKeyPEM(priv ed25519.PrivateKey) []byte {
 
 func formatKnownHosts(key ssh.PublicKey) string {
 	return fmt.Sprintf("%v %s", key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
+}
+
+func performAnnouncement(command string, key ssh.PublicKey) (stderr string, err error) {
+	args := strings.Fields(command)
+	args = append(args, formatKnownHosts(key))
+	_, err = exec.Command(args[0], args[1:]...).Output()
+	if err != nil {
+		var eerr *exec.ExitError
+		if errors.As(err, &eerr) {
+			return string(eerr.Stderr), err
+		}
+		return "", err
+	}
+	return "", nil
 }
 
 func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
