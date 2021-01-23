@@ -66,12 +66,12 @@ func run(authorizedKeysPath, announceCmd, port string) error {
 	privPEM := generatePrivateKeyPEM(priv)
 	signer, err := gossh.ParsePrivateKey(privPEM)
 	if err != nil {
-		fmt.Errorf("failed to convert private key to format expected by ssh server: %w", err)
+		return fmt.Errorf("failed to convert private key to format expected by ssh server: %w", err)
 	}
 
 	pubKey, err := gossh.NewPublicKey(pub)
 	if err != nil {
-		fmt.Errorf("failed to convert public key to ssh.PublicKey: %w", err)
+		return fmt.Errorf("failed to convert public key to ssh.PublicKey: %w", err)
 	}
 
 	if announceCmd != "" {
