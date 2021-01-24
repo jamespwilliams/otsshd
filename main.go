@@ -22,6 +22,8 @@ import (
 	"github.com/gliderlabs/ssh"
 )
 
+// TODO: copy host key to clipboard?
+
 func main() {
 	authorizedKeysPathFlag := flag.String("authorized-keys", "", "path to authorized_keys file. stdin will be used if not passed.")
 	announceCmdFlag := flag.String("announce", "", "command which will be run with the generated public key")
