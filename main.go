@@ -28,7 +28,7 @@ func main() {
 	copyEnvFlag := flag.Bool("copy-env", true, "copy environment to ssh sessions (default true)")
 	logPathFlag := flag.String("log", "otssh.log", "path to log to")
 	timeoutFlag := flag.Int("timeout", 600, "timeout in seconds")
-	portFlag := flag.String("port", "2022", "port to listen on")
+	addrFlag := flag.String("addr", ":2022", "address to listen for connections on")
 
 	flag.Parse()
 
@@ -41,9 +41,9 @@ func main() {
 	copyEnv := *copyEnvFlag
 	logPath := *logPathFlag
 	timeout := *timeoutFlag
-	port := *portFlag
+	addr := *addrFlag
 
-	if err := run(authorizedKeysPath, announceCmd, logPath, port, timeout, copyEnv); err != nil {
+	if err := run(authorizedKeysPath, announceCmd, logPath, addr, timeout, copyEnv); err != nil {
 		code := 0
 
 		var exitErr *exec.ExitError
@@ -56,7 +56,7 @@ func main() {
 	}
 }
 
-func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, copyEnv bool) error {
+func run(authorizedKeysPath, announceCmd, logPath, addr string, timeout int, copyEnv bool) error {
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 
@@ -95,8 +95,8 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 
 	timeoutDuration := time.Duration(timeout) * time.Second
 
-	logSuccess("Starting server listening on :" + port + ". The server will use the following key:")
-	server := newOneTimeServer(":"+port, authorizedKeys, signer, logFile, copyEnv, timeoutDuration)
+	logSuccess(fmt.Sprintf("Starting server listening on %v. The server will use the following key:", addr))
+	server := newOneTimeServer(addr, authorizedKeys, signer, logFile, copyEnv, timeoutDuration)
 
 	fmt.Printf("\n%v\n\n", formatKnownHosts(pubKey))
 
