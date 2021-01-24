@@ -10,22 +10,16 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"io"
 	"log"
 	"os"
 	"os/exec"
 	"strings"
-	"sync"
-	"syscall"
 	"time"
-	"unsafe"
 
 	gossh "golang.org/x/crypto/ssh"
-	"golang.org/x/sync/errgroup"
 
 	"github.com/mikesmitty/edkey"
 
-	"github.com/creack/pty"
 	"github.com/gliderlabs/ssh"
 )
 
@@ -100,64 +94,24 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 		}
 	}
 
+	timeoutDuration := time.Duration(timeout) * time.Second
+	server := newOneTimeServer(":"+port, authorizedKeys, signer, logFile, copyEnv, timeoutDuration)
+
 	fmt.Println(formatKnownHosts(pubKey))
 
-	server := &ssh.Server{
-		Addr: ":" + port,
-		PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
-			fmt.Println("client trying", key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
-
-			for _, authorizedKey := range authorizedKeys {
-				if ssh.KeysEqual(key, authorizedKey) {
-					return true
-				}
-			}
-			return false
-		},
-	}
-
-	var sessionErr error
-
-	// We use the same once for handling the session and shutting down the server, because we don't want to shut
-	// down the server when the timeout is hit if there's a live session:
-	var once sync.Once
-	server.Handle(func(s ssh.Session) {
-		once.Do(func() {
-			sessionErr = handleSession(logFile, copyEnv, s)
-			server.Close()
-			cancel()
-		})
-	})
-
-	server.AddHostKey(signer)
-
-	var g errgroup.Group
-	g.Go(func() error {
-		err := server.ListenAndServe()
+	if err = server.ListenAndServe(ctx); err != nil {
 		if errors.Is(err, ssh.ErrServerClosed) {
 			return nil
 		}
-		return err
-	})
 
-	g.Go(func() error {
-		select {
-		case <-ctx.Done():
-			return nil
-		case <-time.After(time.Duration(timeout) * time.Second):
-			once.Do(func() {
-				log.Printf("otssh: no connection within %v seconds, exiting\n", timeout)
-				server.Shutdown(ctx)
-			})
-		}
-		return nil
-	})
-
-	if err := g.Wait(); err != nil {
 		return err
 	}
 
-	return sessionErr
+	if err := server.Close(); err != nil {
+		return fmt.Errorf("failed to ")
+	}
+
+	return server.SessionError()
 }
 
 func generateKey() (ed25519.PublicKey, ed25519.PrivateKey, error) {
@@ -219,68 +173,4 @@ func parseAuthorizedKeysFile(path string) ([]gossh.PublicKey, error) {
 	}
 
 	return keys, nil
-}
-
-func setWinsize(f *os.File, w, h int) {
-	syscall.Syscall(syscall.SYS_IOCTL, f.Fd(), uintptr(syscall.TIOCSWINSZ),
-		uintptr(unsafe.Pointer(&struct{ h, w, x, y uint16 }{uint16(h), uint16(w), 0, 0})))
-}
-
-func handleSession(logW io.Writer, copyEnv bool, s ssh.Session) error {
-	shell := os.Getenv("SHELL")
-	if shell == "" {
-		shell = "bash"
-	}
-
-	cmd := exec.Command(shell)
-
-	ptyReq, winCh, isPty := s.Pty()
-	if !isPty {
-		io.WriteString(s, "No PTY requested.\n")
-		return nil
-	}
-
-	if copyEnv {
-		cmd.Env = append(cmd.Env, os.Environ()...)
-	}
-
-	cmd.Env = append(cmd.Env, fmt.Sprintf("TERM=%s", ptyReq.Term))
-	f, err := pty.Start(cmd)
-	if err != nil {
-		return fmt.Errorf("failed to start pty: %w", err)
-	}
-
-	go func() {
-		for win := range winCh {
-			setWinsize(f, win.Width, win.Height)
-		}
-	}()
-
-	go func() {
-		io.Copy(f, s)
-	}()
-
-	r := bufio.NewReaderSize(f, 1024)
-	for {
-		b := make([]byte, 1024)
-		_, err := r.Read(b)
-
-		if _, ok := err.(*os.PathError); ok {
-			break
-		}
-
-		if err != nil {
-			return fmt.Errorf("failed to read from command: %w", err)
-		}
-
-		if _, err := logW.Write(b); err != nil {
-			return fmt.Errorf("failed to write to log: %w", err)
-		}
-
-		if _, err := s.Write(b); err != nil {
-			return fmt.Errorf("failed to write to session: %w", err)
-		}
-	}
-
-	return cmd.Wait()
 }
