@@ -3,10 +3,8 @@ package main
 import (
 	"bufio"
 	"context"
-	"encoding/base64"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"os/exec"
 	"sync"
@@ -33,8 +31,6 @@ func newOneTimeServer(addr string, authorizedKeys []gossh.PublicKey, signer ssh.
 	server := &ssh.Server{
 		Addr: addr,
 		PublicKeyHandler: func(ctx ssh.Context, key ssh.PublicKey) bool {
-			fmt.Println("client trying", key.Type(), base64.StdEncoding.EncodeToString(key.Marshal()))
-
 			for _, authorizedKey := range authorizedKeys {
 				if ssh.KeysEqual(key, authorizedKey) {
 					return true
@@ -51,7 +47,9 @@ func newOneTimeServer(addr string, authorizedKeys []gossh.PublicKey, signer ssh.
 
 	server.Handle(func(s ssh.Session) {
 		ots.once.Do(func() {
+			logNotice(fmt.Sprintf("session connected from %v", s.RemoteAddr()))
 			ots.sessionErr = handleSSHSession(logWriter, copyEnv, s)
+			logNotice("session disconnected")
 			server.Close()
 		})
 	})
@@ -70,7 +68,7 @@ func (ots *oneTimeServer) ListenAndServe(ctx context.Context) error {
 		select {
 		case <-time.After(ots.timeout):
 			ots.once.Do(func() {
-				log.Printf("otssh: no connection within %v, exiting\n", ots.timeout)
+				logWarn(fmt.Sprintf("no connection within supplied timeout (%v), exiting\n", ots.timeout))
 				ots.Close()
 			})
 		case <-cctx.Done():

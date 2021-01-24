@@ -10,7 +10,6 @@ import (
 	"errors"
 	"flag"
 	"fmt"
-	"log"
 	"os"
 	"os/exec"
 	"strings"
@@ -35,7 +34,7 @@ func main() {
 
 	authorizedKeysPath := *authorizedKeysPathFlag
 	if authorizedKeysPath == "" {
-		log.Print("otssh: -authorized-keys not passed: reading from stdin")
+		logNotice("-authorized-keys not passed: reading authorized keys from stdin")
 	}
 
 	announceCmd := *announceCmdFlag
@@ -52,7 +51,7 @@ func main() {
 			code = exitErr.ProcessState.ExitCode()
 		}
 
-		log.Print("otssh: ", err)
+		logError(err.Error())
 		os.Exit(code)
 	}
 }
@@ -89,15 +88,17 @@ func run(authorizedKeysPath, announceCmd, logPath, port string, timeout int, cop
 
 	if announceCmd != "" {
 		if stderr, err := performAnnouncement(announceCmd, pubKey); err != nil {
-			log.Print("announcement failed:", err)
-			log.Print("stderr from announcement:", stderr)
+			logWarn(fmt.Sprintf("announcement failed: %v", err))
+			logWarn(fmt.Sprintf("stderr from announcement: %v", stderr))
 		}
 	}
 
 	timeoutDuration := time.Duration(timeout) * time.Second
+
+	logSuccess("Starting server listening on :" + port + ". The server will use the following key:")
 	server := newOneTimeServer(":"+port, authorizedKeys, signer, logFile, copyEnv, timeoutDuration)
 
-	fmt.Println(formatKnownHosts(pubKey))
+	fmt.Printf("\n%v\n\n", formatKnownHosts(pubKey))
 
 	if err = server.ListenAndServe(ctx); err != nil {
 		if errors.Is(err, ssh.ErrServerClosed) {
