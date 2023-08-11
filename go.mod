@@ -8,6 +8,6 @@ require (
 	github.com/fatih/color v1.10.0
 	github.com/gliderlabs/ssh v0.3.1
 	github.com/mikesmitty/edkey v0.0.0-20170222072505-3356ea4e686a
-	golang.org/x/crypto v0.0.0-20201221181555-eec23a3978ad
-	golang.org/x/sync v0.0.0-20201207232520-09787c993a3a
+	golang.org/x/crypto v0.1.0
+	golang.org/x/sync v0.0.0-20220722155255-886fb9371eb4
 )
